@@ -9,11 +9,16 @@ st.title("📈 بوت التحليل الفني والأهداف")
 st.write("تحليل لحظي مع نقاط الدخول، الأهداف، ووقف الخسارة")
 
 symbol = st.selectbox("اختر الأصل للتحليل:", ["الذهب (XAU/USD)", "البتكوين (BTC/USD)"])
-ticker = "GC=F" if symbol == "الذهب (XAU/USD)" else "BTC-USD"
-frame = st.selectbox("الإطار الزمني:", ["1d", "1h", "15m"])
+ticker = "XAUUSD=X" if symbol == "الذهب (XAU/USD)" else "BTC-USD"
+
+# إضافة إطار 5m للقائمة
+frame = st.selectbox("الإطار الزمني:", ["1d", "1h", "15m", "5m"])
 
 if st.button("تحليل وحساب الأهداف 🚀"):
-    data = yf.download(ticker, period="1mo", interval=frame)
+    # تحديد الفترة المناسبة بناءً على الإطار الزمني لضمان عمل البيانات بدون أخطاء
+    fetch_period = "7d" if frame in ["5m", "15m"] else "1mo"
+    
+    data = yf.download(ticker, period=fetch_period, interval=frame)
     
     if not data.empty:
         close_prices = data['Close'].squeeze()
@@ -30,7 +35,7 @@ if st.button("تحليل وحساب الأهداف 🚀"):
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         
-        # حساب ATR (لحساب الستوب والأهداف)
+        # حساب ATR
         tr = np.maximum(high_prices - low_prices, 
                         np.maximum(abs(high_prices - close_prices.shift(1)), 
                                    abs(low_prices - close_prices.shift(1))))
@@ -42,7 +47,6 @@ if st.button("تحليل وحساب الأهداف 🚀"):
         
         st.metric(label="سعر الدخول الحالي (Entry)", value=f"${last_price:,.2f}")
         
-        # تحديد الاتجاه والنقاط
         if last_price > last_sma and last_rsi < 70:
             signal = "BUY"
             st.success("🟢 **التوصية: شراء (BUY)**")
