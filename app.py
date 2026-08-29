@@ -11,16 +11,21 @@ st.write("تحليل لحظي مع نقاط الدخول، الأهداف، وو
 symbol = st.selectbox("اختر الأصل للتحليل:", ["الذهب (XAU/USD)", "البتكوين (BTC/USD)"])
 ticker = "XAUUSD=X" if symbol == "الذهب (XAU/USD)" else "BTC-USD"
 
-# إضافة إطار 5m للقائمة
 frame = st.selectbox("الإطار الزمني:", ["1d", "1h", "15m", "5m"])
 
 if st.button("تحليل وحساب الأهداف 🚀"):
-    # تحديد الفترة المناسبة بناءً على الإطار الزمني لضمان عمل البيانات بدون أخطاء
-    fetch_period = "7d" if frame in ["5m", "15m"] else "1mo"
+    # تحديد الفترة بعناية لضمان استجابة Yahoo Finance للإطارات الصغيرة
+    if frame == "5m":
+        fetch_period = "5d"
+    elif frame == "15m":
+        fetch_period = "1mo"
+    else:
+        fetch_period = "1mo"
     
-    data = yf.download(ticker, period=fetch_period, interval=frame)
+    with st.spinner('جاري جلب البيانات...'):
+        data = yf.download(ticker, period=fetch_period, interval=frame, progress=False)
     
-    if not data.empty:
+    if not data.empty and len(data) >= 20:
         close_prices = data['Close'].squeeze()
         high_prices = data['High'].squeeze()
         low_prices = data['Low'].squeeze()
@@ -78,5 +83,5 @@ if st.button("تحليل وحساب الأهداف 🚀"):
         chart_data = pd.DataFrame({'Close': close_prices, 'SMA_20': sma_20})
         st.line_chart(chart_data)
     else:
-        st.error("تعذر جلب البيانات، يرجى المحاولة لاحقاً.")
+        st.error("تعذر جلب البيانات لهذا الإطار حالياً (قد يكون السوق مغلقاً أو التايم فريم غير متاح). جرب إطار 15m أو 1h.")
         
