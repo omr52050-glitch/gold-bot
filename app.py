@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 
@@ -88,15 +88,41 @@ def load_market_data(ticker, interval):
         return pd.DataFrame()
 
 # -----------------------------------------------------------------------------
-# 4. محرك التحليل الفني (FVG + MACD + Volume + Multi-Indicator Confluence)
+# 4. دالات حساب المؤشرات الفنية بـ Pandas القياسية
 # -----------------------------------------------------------------------------
-def detect_fvg(df):
+def calculate_indicators(df):
+    # EMA
+    df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+    df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
+    
+    # RSI
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+    
+    # ATR
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    df['ATR'] = true_range.rolling(14).mean()
+    
+    # Volume SMA
+    df['Vol_SMA'] = df['Volume'].rolling(20).mean()
+    
+    # FVG
     df['Bullish_FVG'] = False
     df['Bearish_FVG'] = False
-    
-    if len(df) < 3:
-        return df
-    
     for i in range(2, len(df)):
         if df['Low'].iloc[i] > df['High'].iloc[i-2]:
             df.iloc[i, df.columns.get_loc('Bullish_FVG')] = True
@@ -105,20 +131,11 @@ def detect_fvg(df):
             
     return df
 
+# -----------------------------------------------------------------------------
+# 5. محرك التحليل واتخاذ القرار
+# -----------------------------------------------------------------------------
 def analyze_market_advanced(df, risk_mult):
-    df = detect_fvg(df)
-    
-    df['EMA20'] = ta.ema(df['Close'], length=20)
-    df['EMA50'] = ta.ema(df['Close'], length=50)
-    
-    macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
-    df['MACD'] = macd['MACD_12_26_9']
-    df['MACD_Signal'] = macd['MACDs_12_26_9']
-    df['MACD_Hist'] = macd['MACDh_12_26_9']
-    
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-    df['Vol_SMA'] = ta.sma(df['Volume'], length=20)
+    df = calculate_indicators(df)
     
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -196,7 +213,7 @@ def analyze_market_advanced(df, risk_mult):
     return signal, confidence, price, sl, tp1, tp2, tp3, reasons, df
 
 # -----------------------------------------------------------------------------
-# 5. عرض النتيجة بالواجهة
+# 6. الواجهة والعرض
 # -----------------------------------------------------------------------------
 if st.button("🚀 تحليل وحساب الأهداف المتقدمة"):
     with st.spinner("جاري جلب البيانات وإجراء التحليل الفني الشامل..."):
@@ -259,4 +276,4 @@ if st.button("🚀 تحليل وحساب الأهداف المتقدمة"):
                 
             fig.update_layout(template="plotly_dark", height=500, margin=dict(l=20, r=20, t=30, b=20))
             st.plotly_chart(fig, use_container_width=True)
-        
+            
