@@ -5,7 +5,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 
 # -----------------------------------------------------------------------------
-# 1. إعدادات الصفحة والتصميم
+# 1. إعدادات الصفحة
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="بوت التحليل الفني المتقدم | FVG & MACD",
@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. العنوان والقائمة الجانبية
+# 2. القائمة الجانبية والأصول
 # -----------------------------------------------------------------------------
 st.title("📈 بوت التحليل الفني والأهداف المتقدم")
 st.caption("تحليل فني لحظي معزز بمؤشرات FVG, MACD, RSI, EMA, ATR وتأكيد الأحجام")
@@ -47,10 +47,10 @@ sidebar = st.sidebar
 sidebar.header("⚙️ إعدادات التحليل")
 
 asset_options = {
-    "الذهب الفوري (XAU/USD)": "GC=F", # الأكثر استقراراً وجلباً للبيانات اللحظية
+    "الذهب الفوري (XAU/USD)": "XAUUSD=X",
     "البتكوين (BTC/USD)": "BTC-USD",
     "الإيثيريوم (ETH/USD)": "ETH-USD",
-    "الفضة (XAG/USD)": "SI=F",
+    "الفضة (XAG/USD)": "XAGUSD=X",
     "اليورو/دولار (EUR/USD)": "EURUSD=X",
     "مؤشر ناسداك (NQ=F)": "NQ=F"
 }
@@ -70,30 +70,27 @@ tf = timeframe_options[selected_tf_label]
 risk_multiplier = sidebar.slider("مضاعف مخاطرة ATR (لتحديد SL/TP):", 1.0, 3.0, 1.5, 0.1)
 
 # -----------------------------------------------------------------------------
-# 3. جلب البيانات المرنة مع معالجة قيود Yahoo Finance
+# 3. جلب بيانات الذهب المباشرة بدون خلط
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def load_market_data(ticker, interval):
     try:
-        # تحديد المدة المناسبة بناءً على الفريم لمنع استجابة فارغة
-        period = "5d" if interval in ["5m", "15m"] else "1mo"
-        df = yf.download(tickers=ticker, period=period, interval=interval, progress=False)
+        # جلب البيانات مباشرة للرمز المختار
+        df = yf.Ticker(ticker).history(period="7d", interval=interval)
         
         if df.empty:
-            # محاولة احتياطية مع السعر الفوري المباشر
-            alt_ticker = "XAUUSD=X" if ticker == "GC=F" else ticker
-            df = yf.download(tickers=alt_ticker, period="2d", interval=interval, progress=False)
+            df = yf.download(tickers=ticker, period="5d", interval=interval, progress=False)
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
         df.dropna(inplace=True)
         return df
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 # -----------------------------------------------------------------------------
-# 4. دالات حساب المؤشرات الفنية
+# 4. حساب المؤشرات الفنية
 # -----------------------------------------------------------------------------
 def calculate_indicators(df):
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
@@ -118,8 +115,6 @@ def calculate_indicators(df):
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(14).mean()
     
-    df['Vol_SMA'] = df['Volume'].rolling(20).mean() if 'Volume' in df.columns else 0
-    
     df['Bullish_FVG'] = False
     df['Bearish_FVG'] = False
     for i in range(2, len(df)):
@@ -131,7 +126,7 @@ def calculate_indicators(df):
     return df
 
 # -----------------------------------------------------------------------------
-# 5. محرك التحليل واتخاذ القرار
+# 5. تحليل السوق واتخاذ القرار
 # -----------------------------------------------------------------------------
 def analyze_market_advanced(df, risk_mult):
     df = calculate_indicators(df)
@@ -139,8 +134,8 @@ def analyze_market_advanced(df, risk_mult):
     last = df.iloc[-1]
     prev = df.iloc[-2]
     
-    price = last['Close']
-    atr = last['ATR'] if pd.notna(last['ATR']) else (price * 0.01)
+    price = float(last['Close'])
+    atr = float(last['ATR']) if pd.notna(last['ATR']) else (price * 0.005)
     
     bullish_score = 0
     bearish_score = 0
@@ -165,15 +160,12 @@ def analyze_market_advanced(df, risk_mult):
         reasons.append("مؤشر RSI في نطاق شراء إيجابي ومتوازن")
     elif 35 <= last['RSI'] <= 60:
         bearish_score += 20
-        reasons.append("مؤشر RSI في نطاق بيع سلبية متوازن")
+        reasons.append("مؤشر RSI في نطاق بيع سلبي متوازن")
         
-    recent_bull_fvg = df['Bullish_FVG'].tail(5).any()
-    recent_bear_fvg = df['Bearish_FVG'].tail(5).any()
-    
-    if recent_bull_fvg:
+    if df['Bullish_FVG'].tail(5).any():
         bullish_score += 15
         reasons.append("تكون فجوة سعرية شرائية (Bullish FVG) مؤخراً")
-    if recent_bear_fvg:
+    if df['Bearish_FVG'].tail(5).any():
         bearish_score += 15
         reasons.append("تكون فجوة سعرية بيعية (Bearish FVG) مؤخراً")
 
@@ -199,14 +191,14 @@ def analyze_market_advanced(df, risk_mult):
     return signal, confidence, price, sl, tp1, tp2, tp3, reasons, df
 
 # -----------------------------------------------------------------------------
-# 6. الواجهة والعرض
+# 6. الواجهة الرسمية
 # -----------------------------------------------------------------------------
 if st.button("🚀 تحليل وحساب الأهداف المتقدمة"):
-    with st.spinner("جاري جلب البيانات وإجراء التحليل الفني الشامل..."):
+    with st.spinner("جاري جلب البيانات وإجراء التحليل الفني..."):
         df = load_market_data(symbol, tf)
         
         if df.empty or len(df) < 15:
-            st.error("تعذر جلب البيانات في الوقت الحالي. جرب تغيير الإطار الزمني إلى (15m أو 1h) أوجرب مرة أخرى.")
+            st.error("تعذر جلب البيانات. تأكد من اتصال الإنترنت أو جرب إطاراً زمنياً آخر.")
         else:
             signal, confidence, price, sl, tp1, tp2, tp3, reasons, df_analyzed = analyze_market_advanced(df, risk_multiplier)
             last = df_analyzed.iloc[-1]
