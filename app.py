@@ -4,13 +4,11 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 
-# ضبط إعدادات الصفحة للهاتف
 st.set_page_config(page_title="محلل الذهب", layout="wide", initial_sidebar_state="collapsed")
 
 st.title("🏆 محلل الذهب الذكي (XAUUSD)")
 
-# شريط الخيارات علوي للهاتف
-timeframe = st.selectbox("اختر الإطار الزمني:", ["15m", "1h", "4h", "1d"], index=1)
+timeframe = st.selectbox("اختر الإطار الزمني:", ["15m", "1h", "4h", "1d"], index=0)
 
 @st.cache_data(ttl=60)
 def load_data(tf):
@@ -19,7 +17,6 @@ def load_data(tf):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     
-    # حساب المؤشرات
     df['EMA_50'] = ta.trend.ema_indicator(df['Close'], window=50)
     df['EMA_200'] = ta.trend.ema_indicator(df['Close'], window=200)
     df['RSI'] = ta.momentum.rsi(df['Close'], window=14)
@@ -32,7 +29,28 @@ def load_data(tf):
 df = load_data(timeframe)
 data_slice = df.tail(60)
 
-# رسم الشارت التفاعلي باستخدام Plotly (ممتاز للمس بالهاتف)
+last_row = df.iloc[-1]
+close_p = float(last_row['Close'])
+atr_v = float(last_row['ATR'])
+is_bullish = float(last_row['EMA_50']) > float(last_row['EMA_200'])
+
+# حساب المستويات بناءً على الاتجاه الحقيقي والسعر الحالي
+if is_bullish:
+    sl_price = close_p - (atr_v * 1.5)
+    tp_price = close_p + ((close_p - sl_price) * 2.0)
+    signal_type = "BUY"
+else:
+    sl_price = close_p + (atr_v * 1.5)
+    tp_price = close_p - ((sl_price - close_p) * 2.0)
+    signal_type = "SELL"
+
+# عرض البطاقات التوضيحية للأهداف والستوب لوز
+col1, col2, col3 = st.columns(3)
+col1.metric("السعر الحالي", f"${close_p:.2f}")
+col2.metric("الهدف المقترح (TP)", f"${tp_price:.2f}")
+col3.metric("وقف الخسارة (SL)", f"${sl_price:.2f}")
+
+# رسم الشارت التفاعلي
 fig = go.Figure()
 
 # إضافة الشموع اليابانية
@@ -47,24 +65,23 @@ fig.add_trace(go.Candlestick(
 fig.add_trace(go.Scatter(x=data_slice.index, y=data_slice['EMA_50'], name="EMA 50", line=dict(color='cyan', width=1)))
 fig.add_trace(go.Scatter(x=data_slice.index, y=data_slice['EMA_200'], name="EMA 200", line=dict(color='orange', width=1)))
 
-# التحقق من الإشارات الأخيرة
-last_row = df.iloc[-1]
-prev_row = df.iloc[-2]
+# رسم خط الهدف (Take Profit)
+fig.add_hline(
+    y=tp_price, line_dash="dash", line_color="green", line_width=2,
+    annotation_text=f"الهدف TP: {tp_price:.2f}", annotation_position="top right"
+)
 
-buy_cond = (last_row['EMA_50'] > last_row['EMA_200']) and (prev_row['MACD'] < prev_row['MACD_Signal'] and last_row['MACD'] > last_row['MACD_Signal']) and (last_row['RSI'] > 50)
-sell_cond = (last_row['EMA_50'] < last_row['EMA_200']) and (prev_row['MACD'] > prev_row['MACD_Signal'] and last_row['MACD'] < last_row['MACD_Signal']) and (last_row['RSI'] < 50)
+# رسم خط وقف الخسارة (Stop Loss)
+fig.add_hline(
+    y=sl_price, line_dash="dash", line_color="red", line_width=2,
+    annotation_text=f"الوقف SL: {sl_price:.2f}", annotation_position="bottom right"
+)
 
-close_p = float(last_row['Close'])
-atr_v = float(last_row['ATR'])
+fig.update_layout(
+    template="plotly_dark",
+    xaxis_rangeslider_visible=False,
+    height=500,
+    margin=dict(l=10, r=10, t=10, b=10)
+)
 
-if buy_cond:
-    sl, tp = close_p - (atr_v * 1.5), close_p + ((close_p - (close_p - atr_v * 1.5)) * 2.0)
-    st.success(f"🎯 **إشارة شراء مفعلة** | الهدف (TP): {tp:.2f} | الوقف (SL): {sl:.2f}")
-elif sell_cond:
-    sl, tp = close_p + (atr_v * 1.5), close_p - (((close_p + atr_v * 1.5) - close_p) * 2.0)
-    st.error(f"🎯 **إشارة بيع مفعلة** | الهدف (TP): {tp:.2f} | الوقف (SL): {sl:.2f}")
-else:
-    st.info(f"السعر الحالي: **{close_p:.2f}** | لا توجد إشارات دخول جديدة حالياً.")
-
-fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=450, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(fig, use_container_width=True)
