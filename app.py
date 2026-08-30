@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import ta
 import plotly.graph_objects as go
+import yfinance as yf
 
 # إعدادات الصفحة
 st.set_page_config(page_title="منصة التحليل الرقمي الذكي", layout="wide", initial_sidebar_state="collapsed")
@@ -16,18 +17,19 @@ with col_symbol:
     asset = st.selectbox("اختر زوج التداول:", ["البتكوين (BTCUSDT)", "الذهب (XAUUSD)"])
 
 with col_tf:
-    timeframe = st.selectbox("الإطار الزمني:", ["1m", "5m", "15m", "1h", "4h", "1d"], index=0)
+    timeframe = st.selectbox("الإطار الزمني:", ["1m", "5m", "15m", "1h", "4h", "1d"], index=1)
 
 with col_btn:
-    st.write("") # محاذاة الزر
+    st.write("")
     st.write("")
     if st.button("🔄 تحديث السعر"):
-        st.cache_data.clear()
+        st.rerun()
 
-# دالة جلب البيانات المباشرة بدون كاش معطل
-def fetch_binance_klines(symbol, interval):
+# جلب بيانات البتكوين مباشرة عبر API بـ User-Agent موثوق
+def fetch_binance_data(symbol, interval):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
-    res = requests.get(url, timeout=5)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    res = requests.get(url, headers=headers, timeout=10)
     data = res.json()
     
     df = pd.DataFrame(data, columns=[
@@ -42,28 +44,40 @@ def fetch_binance_klines(symbol, interval):
         
     return df
 
+# جلب بيانات الذهب عبر yfinance مع تحديد الفترة بمرونة
 def fetch_gold_data(interval):
-    # جلب بيانات الذهب من مصدر ياهو بدون كاش طويل
-    import yfinance as yf
-    df = yf.Ticker("GC=F").history(period="2d", interval=interval)
+    period_map = {"1m": "1d", "5m": "5d", "15m": "1mo", "1h": "1mo", "4h": "2mo", "1d": "1y"}
+    p = period_map.get(interval, "5d")
+    
+    ticker = yf.Ticker("GC=F")
+    df = ticker.history(period=p, interval=interval)
+    if df.empty:
+        return None
     df = df.reset_index()
     return df
 
-# جلب البيانات بناءً على الاختيار
-try:
-    if asset == "البتكوين (BTCUSDT)":
-        tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
-        df = fetch_binance_klines("BTCUSDT", tf_map[timeframe])
-    else:
+# جلب البيانات الحية
+df = None
+if asset == "البتكوين (BTCUSDT)":
+    tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
+    try:
+        df = fetch_binance_data("BTCUSDT", tf_map[timeframe])
+    except Exception as e:
+        st.error(f"⚠️ تعذر الاتصال بمصدر بيانات البتكوين: {e}")
+else:
+    try:
         df = fetch_gold_data(timeframe)
+    except Exception as e:
+        st.error(f"⚠️ تعذر الاتصال بمصدر بيانات الذهب: {e}")
 
-    # حساب المؤشرات الفنية
+if df is not None and not df.empty:
     close_s = df['Close']
     high_s = df['High']
     low_s = df['Low']
 
-    df['EMA_50'] = ta.trend.ema_indicator(close_s, window=min(50, len(df)-1))
-    df['EMA_200'] = ta.trend.ema_indicator(close_s, window=min(200, len(df)-1))
+    # حساب المؤشرات الفنية
+    df['EMA_50'] = ta.trend.ema_indicator(close_s, window=min(50, len(df)))
+    df['EMA_200'] = ta.trend.ema_indicator(close_s, window=min(200, len(df)))
     df['RSI'] = ta.momentum.rsi(close_s, window=14)
     df['ATR'] = ta.volatility.average_true_range(high_s, low_s, close_s, window=14)
     
@@ -79,7 +93,7 @@ try:
 
     is_bullish = (ema50 >= ema200) and (rsi_v >= 50)
 
-    # حساب الأهداف والستوب
+    # حساب الستوب والأهداف الـ 5
     targets = []
     if is_bullish:
         trend_status = "🚀 اتجاه صاعد (فرصة شراء)"
@@ -109,7 +123,7 @@ try:
 
     # رسم الشارت
     data_slice = df.tail(60)
-    date_col = 'Datetime' if 'Datetime' in data_slice.columns else 'Date'
+    date_col = 'Datetime' if 'Datetime' in data_slice.columns else ('Date' if 'Date' in data_slice.columns else data_slice.columns[0])
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
@@ -142,7 +156,6 @@ try:
     )
 
     st.plotly_chart(fig, use_container_width=True)
-
-except Exception as e:
-    st.error("⚠️ جاري الاتصال بالسيرفر وجلب أحدث الشمعات، يرجى الضغط على زر التحديث أعلاه.")
+else:
+    st.warning("⚠️ جاري جلب الشمعات الحية، اضغط على زر 'تحديث السعر' أعلاه.")
     
