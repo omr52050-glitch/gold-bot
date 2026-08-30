@@ -1,87 +1,262 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import numpy as np
+import pandas_ta as ta
+import yfinance as yf
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="بوت تحليل الذهب والبتكوين", layout="centered")
+# -----------------------------------------------------------------------------
+# 1. إعدادات الصفحة والتصميم
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="بوت التحليل الفني المتقدم | FVG & MACD",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-st.title("📈 بوت التحليل الفني والأهداف")
-st.write("تحليل لحظي مع نقاط الدخول، الأهداف، ووقف الخسارة")
+st.markdown("""
+<style>
+    .stMetric {
+        background-color: #1e293b;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+    }
+    .signal-card {
+        padding: 20px;
+        border-radius: 12px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 24px;
+        margin-top: 10px;
+        margin-bottom: 20px;
+    }
+    .buy-card { background-color: #064e3b; color: #34d399; border: 1px solid #059669; }
+    .sell-card { background-color: #7f1d1d; color: #f87171; border: 1px solid #dc2626; }
+    .neutral-card { background-color: #334155; color: #cbd5e1; border: 1px solid #475569; }
+</style>
+""", unsafe_allow_html=True)
 
-symbol = st.selectbox("اختر الأصل للتحليل:", ["الذهب (XAU/USD)", "البتكوين (BTC/USD)"])
-ticker = "XAUUSD=X" if symbol == "الذهب (XAU/USD)" else "BTC-USD"
+# -----------------------------------------------------------------------------
+# 2. العنوان والقائمة الجانبية
+# -----------------------------------------------------------------------------
+st.title("📈 بوت التحليل الفني والأهداف المتقدم")
+st.caption("تحليل فني لحظي معزز بمؤشرات FVG, MACD, RSI, EMA, ATR وتأكيد الأحجام")
 
-frame = st.selectbox("الإطار الزمني:", ["1d", "1h", "15m", "5m"])
+sidebar = st.sidebar
+sidebar.header("⚙️ إعدادات التحليل")
 
-if st.button("تحليل وحساب الأهداف 🚀"):
-    # تحديد الفترة بعناية لضمان استجابة Yahoo Finance للإطارات الصغيرة
-    if frame == "5m":
-        fetch_period = "5d"
-    elif frame == "15m":
-        fetch_period = "1mo"
-    else:
-        fetch_period = "1mo"
+asset_options = {
+    "البتكوين (BTC/USD)": "BTC-USD",
+    "الإيثيريوم (ETH/USD)": "ETH-USD",
+    "الذهب (XAU/USD)": "GC=F",
+    "الفضة (XAG/USD)": "SI=F",
+    "اليورو/دولار (EUR/USD)": "EURUSD=X",
+    "مؤشر ناسداك (NQ=F)": "NQ=F"
+}
+
+timeframe_options = {
+    "5 دقائق (5m)": "5m",
+    "15 دقيقة (15m)": "15m",
+    "ساعة واحدة (1h)": "1h",
+    "4 ساعات (4h)": "1d"
+}
+
+selected_asset_label = sidebar.selectbox("اختر الأصل للتحليل:", list(asset_options.keys()))
+selected_tf_label = sidebar.selectbox("الإطار الزمني:", list(timeframe_options.keys()))
+
+symbol = asset_options[selected_asset_label]
+tf = timeframe_options[selected_tf_label]
+
+risk_multiplier = sidebar.slider("مضاعف مخاطرة ATR (لتحديد SL/TP):", 1.0, 3.0, 1.5, 0.1)
+
+# -----------------------------------------------------------------------------
+# 3. جلب البيانات
+# -----------------------------------------------------------------------------
+@st.cache_data(ttl=60)
+def load_market_data(ticker, interval):
+    try:
+        df = yf.download(tickers=ticker, period="7d", interval=interval, progress=False)
+        if df.empty:
+            return pd.DataFrame()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(inplace=True)
+        return df
+    except Exception as e:
+        st.error(f"خطأ في جلب البيانات: {e}")
+        return pd.DataFrame()
+
+# -----------------------------------------------------------------------------
+# 4. محرك التحليل الفني (FVG + MACD + Volume + Multi-Indicator Confluence)
+# -----------------------------------------------------------------------------
+def detect_fvg(df):
+    df['Bullish_FVG'] = False
+    df['Bearish_FVG'] = False
     
-    with st.spinner('جاري جلب البيانات...'):
-        data = yf.download(ticker, period=fetch_period, interval=frame, progress=False)
+    if len(df) < 3:
+        return df
     
-    if not data.empty and len(data) >= 20:
-        close_prices = data['Close'].squeeze()
-        high_prices = data['High'].squeeze()
-        low_prices = data['Low'].squeeze()
-        
-        # حساب SMA 20
-        sma_20 = close_prices.rolling(window=20).mean()
-        
-        # حساب RSI 14
-        delta = close_prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        
-        # حساب ATR
-        tr = np.maximum(high_prices - low_prices, 
-                        np.maximum(abs(high_prices - close_prices.shift(1)), 
-                                   abs(low_prices - close_prices.shift(1))))
-        atr = tr.rolling(14).mean().iloc[-1]
-        
-        last_price = float(close_prices.iloc[-1])
-        last_sma = float(sma_20.iloc[-1])
-        last_rsi = float(rsi.iloc[-1])
-        
-        st.metric(label="سعر الدخول الحالي (Entry)", value=f"${last_price:,.2f}")
-        
-        if last_price > last_sma and last_rsi < 70:
-            signal = "BUY"
-            st.success("🟢 **التوصية: شراء (BUY)**")
-            stop_loss = last_price - (1.5 * atr)
-            tp1 = last_price + (1.5 * atr)
-            tp2 = last_price + (3.0 * atr)
-        elif last_price < last_sma and last_rsi > 30:
-            signal = "SELL"
-            st.error("🔴 **التوصية: بيع (SELL)**")
-            stop_loss = last_price + (1.5 * atr)
-            tp1 = last_price - (1.5 * atr)
-            tp2 = last_price - (3.0 * atr)
-        else:
-            signal = "WAIT"
-            st.warning("🟡 **التوصية: انتظار (HOLD) - لا تدخل الآن**")
-            stop_loss = tp1 = tp2 = 0
-
-        if signal != "WAIT":
-            st.markdown("---")
-            st.subheader("🎯 تفاصيل الصفقة:")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🛑 وقف الخسارة (SL)", f"${stop_loss:,.2f}")
-            col2.metric("🎯 الهدف الأول (TP1)", f"${tp1:,.2f}")
-            col3.metric("🚀 الهدف الثاني (TP2)", f"${tp2:,.2f}")
+    for i in range(2, len(df)):
+        if df['Low'].iloc[i] > df['High'].iloc[i-2]:
+            df.iloc[i, df.columns.get_loc('Bullish_FVG')] = True
+        elif df['High'].iloc[i] < df['Low'].iloc[i-2]:
+            df.iloc[i, df.columns.get_loc('Bearish_FVG')] = True
             
-            st.write(f"- مؤشر RSI: **{last_rsi:.1f}**")
-            st.write(f"- نطاق التقلب (ATR): **${atr:,.2f}**")
-        
-        chart_data = pd.DataFrame({'Close': close_prices, 'SMA_20': sma_20})
-        st.line_chart(chart_data)
+    return df
+
+def analyze_market_advanced(df, risk_mult):
+    df = detect_fvg(df)
+    
+    df['EMA20'] = ta.ema(df['Close'], length=20)
+    df['EMA50'] = ta.ema(df['Close'], length=50)
+    
+    macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+    df['MACD'] = macd['MACD_12_26_9']
+    df['MACD_Signal'] = macd['MACDs_12_26_9']
+    df['MACD_Hist'] = macd['MACDh_12_26_9']
+    
+    df['RSI'] = ta.rsi(df['Close'], length=14)
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['Vol_SMA'] = ta.sma(df['Volume'], length=20)
+    
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    price = last['Close']
+    atr = last['ATR'] if pd.notna(last['ATR']) else (price * 0.01)
+    
+    bullish_score = 0
+    bearish_score = 0
+    reasons = []
+    
+    # 1. الاتجاه العام
+    if last['EMA20'] > last['EMA50']:
+        bullish_score += 25
+        reasons.append("اتجاه صاعد (EMA20 أعلى من EMA50)")
     else:
-        st.error("تعذر جلب البيانات لهذا الإطار حالياً (قد يكون السوق مغلقاً أو التايم فريم غير متاح). جرب إطار 15m أو 1h.")
+        bearish_score += 25
+        reasons.append("اتجاه هابط (EMA20 أدنى من EMA50)")
+        
+    # 2. زخم MACD
+    if last['MACD'] > last['MACD_Signal'] and last['MACD_Hist'] > prev['MACD_Hist']:
+        bullish_score += 25
+        reasons.append("زخم MACD إيجابي وتزايد في عمود الهيستوجرام")
+    elif last['MACD'] < last['MACD_Signal'] and last['MACD_Hist'] < prev['MACD_Hist']:
+        bearish_score += 25
+        reasons.append("زخم MACD سلبي وتناقص في عمود الهيستوجرام")
+        
+    # 3. مستويات RSI
+    if 40 <= last['RSI'] <= 65:
+        bullish_score += 20
+        reasons.append("مؤشر RSI في نطاق شراء إيجابي ومتوازن")
+    elif 35 <= last['RSI'] <= 60:
+        bearish_score += 20
+        reasons.append("مؤشر RSI في نطاق بيع سلبية متوازن")
+        
+    # 4. الفجوة السعرية FVG
+    recent_bull_fvg = df['Bullish_FVG'].tail(5).any()
+    recent_bear_fvg = df['Bearish_FVG'].tail(5).any()
+    
+    if recent_bull_fvg:
+        bullish_score += 15
+        reasons.append("تكون فجوة سعرية شرائية (Bullish FVG) مؤخراً")
+    if recent_bear_fvg:
+        bearish_score += 15
+        reasons.append("تكون فجوة سعرية بيعية (Bearish FVG) مؤخراً")
+        
+    # 5. حجم التداول
+    if last['Volume'] > last['Vol_SMA']:
+        if last['Close'] > last['Open']:
+            bullish_score += 15
+            reasons.append("ارتفاع حجم التداول مع شمعة شرائية صريحة")
+        else:
+            bearish_score += 15
+            reasons.append("ارتفاع حجم التداول مع شمعة بيعية صريحة")
+
+    if bullish_score >= 60 and bullish_score > bearish_score:
+        signal = "BUY"
+        confidence = bullish_score
+        sl = price - (atr * risk_mult)
+        tp1 = price + (atr * risk_mult)
+        tp2 = price + (atr * risk_mult * 2.0)
+        tp3 = price + (atr * risk_mult * 3.0)
+    elif bearish_score >= 60 and bearish_score > bullish_score:
+        signal = "SELL"
+        confidence = bearish_score
+        sl = price + (atr * risk_mult)
+        tp1 = price - (atr * risk_mult)
+        tp2 = price - (atr * risk_mult * 2.0)
+        tp3 = price - (atr * risk_mult * 3.0)
+    else:
+        signal = "NEUTRAL"
+        confidence = max(bullish_score, bearish_score)
+        sl, tp1, tp2, tp3 = None, None, None, None
+
+    return signal, confidence, price, sl, tp1, tp2, tp3, reasons, df
+
+# -----------------------------------------------------------------------------
+# 5. عرض النتيجة بالواجهة
+# -----------------------------------------------------------------------------
+if st.button("🚀 تحليل وحساب الأهداف المتقدمة"):
+    with st.spinner("جاري جلب البيانات وإجراء التحليل الفني الشامل..."):
+        df = load_market_data(symbol, tf)
+        
+        if df.empty or len(df) < 50:
+            st.error("تعذر جلب بيانات كافية للأصل المختار.")
+        else:
+            signal, confidence, price, sl, tp1, tp2, tp3, reasons, df_analyzed = analyze_market_advanced(df, risk_multiplier)
+            last = df_analyzed.iloc[-1]
+            
+            st.markdown("---")
+            
+            if signal == "BUY":
+                st.markdown(f'<div class="signal-card buy-card">🟢 التوصية: شراء (BUY) - نسبة التأكيد: {confidence}%</div>', unsafe_allow_html=True)
+            elif signal == "SELL":
+                st.markdown(f'<div class="signal-card sell-card">🔴 التوصية: بيع (SELL) - نسبة التأكيد: {confidence}%</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="signal-card neutral-card">🟡 التوصية: محايد (NEUTRAL) - انتظار اكتمال التأكيدات</div>', unsafe_allow_html=True)
+                
+            st.subheader(f"سعر الدخول الحالي (Entry): ${price:,.2f}")
+            
+            if signal != "NEUTRAL":
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("🎯 الهدف الأول (TP1)", f"${tp1:,.2f}")
+                col2.metric("🚀 الهدف الثاني (TP2)", f"${tp2:,.2f}")
+                col3.metric("🔥 الهدف الثالث (TP3)", f"${tp3:,.2f}")
+                col4.metric("🛑 وقف الخسارة (SL)", f"${sl:,.2f}")
+            
+            st.markdown("---")
+            
+            st.write("### 📊 ملخص المؤشرات والتأكيدات")
+            col_a, col_b, col_c, col_d = st.columns(4)
+            col_a.metric("RSI (14)", f"{last['RSI']:.2f}")
+            col_b.metric("MACD Hist", f"{last['MACD_Hist']:.4f}")
+            col_c.metric("ATR (التقلب)", f"${last['ATR']:,.2f}")
+            col_d.metric("EMA 20 / 50", f"{last['EMA20']:.1f} / {last['EMA50']:.1f}")
+
+            with st.expander("🔍 أسباب التوصية وشروط التوافق (Confluence Checklist)"):
+                for reason in reasons:
+                    st.write(f"- {reason}")
+            
+            st.write("### 📉 الرسم البياني والتوصية")
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(
+                x=df_analyzed.index,
+                open=df_analyzed['Open'],
+                high=df_analyzed['High'],
+                low=df_analyzed['Low'],
+                close=df_analyzed['Close'],
+                name="السعر"
+            ))
+            fig.add_trace(go.Scatter(x=df_analyzed.index, y=df_analyzed['EMA20'], mode='lines', name='EMA 20', line=dict(color='cyan', width=1.5)))
+            fig.add_trace(go.Scatter(x=df_analyzed.index, y=df_analyzed['EMA50'], mode='lines', name='EMA 50', line=dict(color='orange', width=1.5)))
+            
+            if signal != "NEUTRAL":
+                fig.add_hline(y=sl, line_dash="dash", line_color="red", annotation_text="SL")
+                fig.add_hline(y=tp1, line_dash="dash", line_color="green", annotation_text="TP1")
+                fig.add_hline(y=tp2, line_dash="dash", line_color="lime", annotation_text="TP2")
+                
+            fig.update_layout(template="plotly_dark", height=500, margin=dict(l=20, r=20, t=30, b=20))
+            st.plotly_chart(fig, use_container_width=True)
         
