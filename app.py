@@ -10,27 +10,38 @@ st.set_page_config(
     page_title="منصة تحليل أسعار الذهب الذكية",
     page_icon="🪙",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
+# تخصيص الاتجاه والتصميم بدعم اللغة العربية بدون تداخل النصوص
 st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
-    html, body, [class*="css"]  {
+    
+    /* تطبيق الخط العربي وتنسيق الاتجاه للواجهة الرئيسية */
+    html, body, [class*="st-"], .main .block-container {
         font-family: 'Cairo', sans-serif;
         direction: rtl;
         text-align: right;
     }
-    .stMetric {
-        background-color: #1e222d;
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #2a2e39;
+    
+    /* إصلاح القائمة الجانبية لتجنب التداخل */
+    [data-testid="stSidebar"] {
+        direction: rtl;
+        text-align: right;
     }
+    
+    /* تحسين البطاقات والإحصائيات */
+    [data-testid="stMetricValue"] {
+        font-size: 24px !important;
+        font-weight: bold;
+    }
+    
     .signal-box {
         padding: 15px;
         border-radius: 10px;
+        margin-top: 10px;
         margin-bottom: 15px;
         text-align: center;
         font-size: 22px;
@@ -76,7 +87,6 @@ def calculate_indicators(df):
     exp2 = data["Close"].ewm(span=26, adjust=False).mean()
     data["MACD"] = exp1 - exp2
     data["MACD_Signal"] = data["MACD"].ewm(span=9, adjust=False).mean()
-    data["MACD_Hist"] = data["MACD"] - data["MACD_Signal"]
 
     # حساب ATR لقياس مدى تذبذب السعر لاستخدامه في الأهداف
     high_low = data["High"] - data["Low"]
@@ -90,12 +100,10 @@ def calculate_indicators(df):
 
 
 def calculate_targets(df, signal_type):
-    """حساب الأهداف ووقف الخسارة بناءً على مستويات الدعم والمقاومة و ATR"""
     latest = df.iloc[-1]
     current_price = latest["Close"]
-    atr = latest["ATR"]
+    atr = latest["ATR"] if not pd.isna(latest["ATR"]) else 15.0
 
-    # إيجاد القمم والقيعان الأخيرة لتحديد الدعم والمقاومة
     recent_high = df["High"].tail(20).max()
     recent_low = df["Low"].tail(20).min()
 
@@ -103,19 +111,16 @@ def calculate_targets(df, signal_type):
 
     if "شراء" in signal_type:
         targets["type"] = "BUY"
-        targets["entry"] = current_price
         targets["tp1"] = current_price + (1.5 * atr)
         targets["tp2"] = max(current_price + (3.0 * atr), recent_high)
         targets["sl"] = current_price - (1.5 * atr)
     elif "بيع" in signal_type:
         targets["type"] = "SELL"
-        targets["entry"] = current_price
         targets["tp1"] = current_price - (1.5 * atr)
         targets["tp2"] = min(current_price - (3.0 * atr), recent_low)
         targets["sl"] = current_price + (1.5 * atr)
     else:
         targets["type"] = "NEUTRAL"
-        targets["entry"] = current_price
         targets["support"] = recent_low
         targets["resistance"] = recent_high
 
@@ -197,39 +202,39 @@ if df_raw is not None and not df_raw.empty:
     signal_text, signal_class, reasons = analyze_signals(df)
     targets = calculate_targets(df, signal_text)
 
-    # عرض التوصية والأهداف
-    col_sig, col_targets = st.columns([1, 1.5])
+    # عرض التوصية
+    st.subheader("التوصية الفنية")
+    st.markdown(
+        f'<div class="signal-box {signal_class}">{signal_text}</div>',
+        unsafe_allow_html=True,
+    )
 
-    with col_sig:
-        st.subheader("التوصية الفنية")
-        st.markdown(
-            f'<div class="signal-box {signal_class}">{signal_text}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("**أسباب التوصية:**")
-        for r in reasons:
-            st.markdown(f"- {r}")
-
-    with col_targets:
-        st.subheader("🎯 الأهداف المستهدفة ومستويات المخاطرة")
-
-        if targets["type"] in ["BUY", "SELL"]:
-            t_col1, t_col2, t_col3 = st.columns(3)
-            t_col1.metric("الهدف الأول (TP1)", f"${targets['tp1']:.2f}")
-            t_col2.metric("الهدف الثاني (TP2)", f"${targets['tp2']:.2f}")
-            t_col3.metric(
-                "وقف الخسارة (SL)",
-                f"${targets['sl']:.2f}",
-                delta_color="inverse",
-            )
-        else:
-            t_col1, t_col2 = st.columns(2)
-            t_col1.metric("مستوى المقاومة القريب", f"${targets['resistance']:.2f}")
-            t_col2.metric("مستوى الدعم القريب", f"${targets['support']:.2f}")
+    st.markdown("**أسباب التوصية:**")
+    for r in reasons:
+        st.markdown(f"- {r}")
 
     st.markdown("---")
 
-    # الرسم البياني وإضافة خطوط الأهداف عليه
+    # عرض الأهداف بطريقة متناسبة مع الشاشات الصغيرة والكبيرة
+    st.subheader("🎯 الأهداف المستهدفة ومستويات المخاطرة")
+
+    if targets["type"] in ["BUY", "SELL"]:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("الهدف الأول (TP1)", f"${targets['tp1']:.2f}")
+        c2.metric("الهدف الثاني (TP2)", f"${targets['tp2']:.2f}")
+        c3.metric(
+            "وقف الخسارة (SL)",
+            f"${targets['sl']:.2f}",
+            delta_color="inverse",
+        )
+    else:
+        c1, c2 = st.columns(2)
+        c1.metric("مستوى المقاومة القريب", f"${targets['resistance']:.2f}")
+        c2.metric("مستوى الدعم القريب", f"${targets['support']:.2f}")
+
+    st.markdown("---")
+
+    # الرسم البياني
     st.subheader("📈 الرسم البياني مع الأهداف")
     fig = go.Figure()
 
@@ -244,29 +249,30 @@ if df_raw is not None and not df_raw.empty:
         )
     )
 
-    # رسم خطوط الأهداف على التشارت
     if targets["type"] in ["BUY", "SELL"]:
         fig.add_hline(
             y=targets["tp1"],
             line_dash="dot",
-            line_color="green",
+            line_color="#26a69a",
             annotation_text="الهدف الأول TP1",
         )
         fig.add_hline(
             y=targets["tp2"],
             line_dash="dash",
-            line_color="green",
+            line_color="#26a69a",
             annotation_text="الهدف الثاني TP2",
         )
         fig.add_hline(
             y=targets["sl"],
             line_dash="solid",
-            line_color="red",
+            line_color="#ef5350",
             annotation_text="وقف الخسارة SL",
         )
 
     fig.update_layout(
-        template="plotly_dark", height=600, xaxis_rangeslider_visible=False
+        template="plotly_dark", height=500, xaxis_rangeslider_visible=False
     )
     st.plotly_chart(fig, use_container_width=True)
-    
+
+else:
+    st.error("تعذر جلب البيانات. يرجى إعادة المحاولة.")
