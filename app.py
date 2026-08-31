@@ -1,7 +1,6 @@
 import datetime
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
@@ -19,20 +18,17 @@ st.markdown(
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
     
-    /* تطبيق الخط العربي وتنسيق الاتجاه للواجهة الرئيسية */
     html, body, [class*="st-"], .main .block-container {
         font-family: 'Cairo', sans-serif;
         direction: rtl;
         text-align: right;
     }
     
-    /* إصلاح القائمة الجانبية لتجنب التداخل */
     [data-testid="stSidebar"] {
         direction: rtl;
         text-align: right;
     }
     
-    /* تحسين البطاقات والإحصائيات */
     [data-testid="stMetricValue"] {
         font-size: 24px !important;
         font-weight: bold;
@@ -69,26 +65,16 @@ def fetch_gold_data(ticker_symbol="GC=F", period="6mo", interval="1d"):
 
 def calculate_indicators(df):
     data = df.copy()
-
-    # المتوسطات المتحركة
     data["SMA_20"] = data["Close"].rolling(window=20).mean()
     data["SMA_50"] = data["Close"].rolling(window=50).mean()
     data["SMA_200"] = data["Close"].rolling(window=200).mean()
 
-    # مؤشر RSI
     delta = data["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     data["RSI"] = 100 - (100 / (1 + rs))
 
-    # مؤشر MACD
-    exp1 = data["Close"].ewm(span=12, adjust=False).mean()
-    exp2 = data["Close"].ewm(span=26, adjust=False).mean()
-    data["MACD"] = exp1 - exp2
-    data["MACD_Signal"] = data["MACD"].ewm(span=9, adjust=False).mean()
-
-    # حساب ATR لقياس مدى تذبذب السعر لاستخدامه في الأهداف
     high_low = data["High"] - data["Low"]
     high_close = (data["High"] - data["Close"].shift()).abs()
     low_close = (data["Low"] - data["Close"].shift()).abs()
@@ -108,7 +94,6 @@ def calculate_targets(df, signal_type):
     recent_low = df["Low"].tail(20).min()
 
     targets = {}
-
     if "شراء" in signal_type:
         targets["type"] = "BUY"
         targets["tp1"] = current_price + (1.5 * atr)
@@ -182,7 +167,7 @@ def analyze_signals(df):
     return signal_text, signal_class, reasons
 
 
-# --- القائمة الجانبية ---
+# القائمة الجانبية
 st.sidebar.title("🪙 خيارات التحليل")
 symbol_option = st.sidebar.selectbox(
     "اختر أداة الذهب:", ["عقود الذهب الآجلة (GC=F)", "صندوق الذهب (GLD)"]
@@ -192,7 +177,7 @@ period = st.sidebar.select_slider(
     "النطاق الزمني:", options=["1mo", "3mo", "6mo", "1y"], value="6mo"
 )
 
-# --- الواجهة الرئيسية ---
+# الواجهة الرئيسية
 st.title("📊 منصة تحليل الذهب وتحديد الأهداف")
 
 df_raw = fetch_gold_data(selected_ticker, period)
@@ -202,7 +187,6 @@ if df_raw is not None and not df_raw.empty:
     signal_text, signal_class, reasons = analyze_signals(df)
     targets = calculate_targets(df, signal_text)
 
-    # عرض التوصية
     st.subheader("التوصية الفنية")
     st.markdown(
         f'<div class="signal-box {signal_class}">{signal_text}</div>',
@@ -215,9 +199,7 @@ if df_raw is not None and not df_raw.empty:
 
     st.markdown("---")
 
-    # عرض الأهداف بطريقة متناسبة مع الشاشات الصغيرة والكبيرة
     st.subheader("🎯 الأهداف المستهدفة ومستويات المخاطرة")
-
     if targets["type"] in ["BUY", "SELL"]:
         c1, c2, c3 = st.columns(3)
         c1.metric("الهدف الأول (TP1)", f"${targets['tp1']:.2f}")
@@ -234,7 +216,6 @@ if df_raw is not None and not df_raw.empty:
 
     st.markdown("---")
 
-    # الرسم البياني
     st.subheader("📈 الرسم البياني مع الأهداف")
     fig = go.Figure()
 
@@ -273,6 +254,6 @@ if df_raw is not None and not df_raw.empty:
         template="plotly_dark", height=500, xaxis_rangeslider_visible=False
     )
     st.plotly_chart(fig, use_container_width=True)
-
 else:
     st.error("تعذر جلب البيانات. يرجى إعادة المحاولة.")
+    
