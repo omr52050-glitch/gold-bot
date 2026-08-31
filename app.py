@@ -1,18 +1,19 @@
 import datetime
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
 # إعدادات الصفحة
 st.set_page_config(
-    page_title="منصة تحليل أسعار الذهب الذكية",
+    page_title="منصة تحليل أسعار الذهب اللحظية (5m / 15m)",
     page_icon="🪙",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# تخصيص الاتجاه والتصميم بدعم اللغة العربية بدون تداخل النصوص
+# تخصيص CSS للغة العربية والتنسيق التجابي
 st.markdown(
     """
     <style>
@@ -30,7 +31,7 @@ st.markdown(
     }
     
     [data-testid="stMetricValue"] {
-        font-size: 24px !important;
+        font-size: 22px !important;
         font-weight: bold;
     }
     
@@ -52,8 +53,8 @@ st.markdown(
 )
 
 
-@st.cache_data(ttl=300)
-def fetch_gold_data(ticker_symbol="GC=F", period="6mo", interval="1d"):
+@st.cache_data(ttl=60)
+def fetch_gold_data(ticker_symbol="GC=F", period="5d", interval="15m"):
     try:
         gold = yf.Ticker(ticker_symbol)
         df = gold.history(period=period, interval=interval)
@@ -65,16 +66,32 @@ def fetch_gold_data(ticker_symbol="GC=F", period="6mo", interval="1d"):
 
 def calculate_indicators(df):
     data = df.copy()
-    data["SMA_20"] = data["Close"].rolling(window=20).mean()
-    data["SMA_50"] = data["Close"].rolling(window=50).mean()
+
+    # 1. المتوسطات المتحركة الأسية (EMA) للتحليل اللحظي
+    data["EMA_9"] = data["Close"].ewm(span=9, adjust=False).mean()
+    data["EMA_21"] = data["Close"].ewm(span=21, adjust=False).mean()
     data["SMA_200"] = data["Close"].rolling(window=200).mean()
 
+    # 2. مؤشر RSI (14)
     delta = data["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     data["RSI"] = 100 - (100 / (1 + rs))
 
+    # 3. مؤشر Stochastic Oscillator (14, 3, 3)
+    low_14 = data["Low"].rolling(window=14).min()
+    high_14 = data["High"].rolling(window=14).max()
+    data["%K"] = 100 * ((data["Close"] - low_14) / (high_14 - low_14))
+    data["%D"] = data["%K"].rolling(window=3).mean()
+
+    # 4. مؤشر MACD
+    exp1 = data["Close"].ewm(span=12, adjust=False).mean()
+    exp2 = data["Close"].ewm(span=26, adjust=False).mean()
+    data["MACD"] = exp1 - exp2
+    data["MACD_Signal"] = data["MACD"].ewm(span=9, adjust=False).mean()
+
+    # 5. حساب ATR لاستخدامه في تحديد نطاق الهدف وحماية رأس المال
     high_low = data["High"] - data["Low"]
     high_close = (data["High"] - data["Close"].shift()).abs()
     low_close = (data["Low"] - data["Close"].shift()).abs()
@@ -88,22 +105,23 @@ def calculate_indicators(df):
 def calculate_targets(df, signal_type):
     latest = df.iloc[-1]
     current_price = latest["Close"]
-    atr = latest["ATR"] if not pd.isna(latest["ATR"]) else 15.0
+    atr = latest["ATR"] if not pd.isna(latest["ATR"]) else 2.5
 
-    recent_high = df["High"].tail(20).max()
-    recent_low = df["Low"].tail(20).min()
+    recent_high = df["High"].tail(15).max()
+    recent_low = df["Low"].tail(15).min()
 
     targets = {}
+
     if "شراء" in signal_type:
         targets["type"] = "BUY"
-        targets["tp1"] = current_price + (1.5 * atr)
-        targets["tp2"] = max(current_price + (3.0 * atr), recent_high)
-        targets["sl"] = current_price - (1.5 * atr)
+        targets["tp1"] = current_price + (1.2 * atr)
+        targets["tp2"] = current_price + (2.5 * atr)
+        targets["sl"] = current_price - (1.2 * atr)
     elif "بيع" in signal_type:
         targets["type"] = "SELL"
-        targets["tp1"] = current_price - (1.5 * atr)
-        targets["tp2"] = min(current_price - (3.0 * atr), recent_low)
-        targets["sl"] = current_price + (1.5 * atr)
+        targets["tp1"] = current_price - (1.2 * atr)
+        targets["tp2"] = current_price - (2.5 * atr)
+        targets["sl"] = current_price + (1.2 * atr)
     else:
         targets["type"] = "NEUTRAL"
         targets["support"] = recent_low
@@ -120,34 +138,40 @@ def analyze_signals(df):
     buy_score = 0
     sell_score = 0
 
-    if prev["SMA_20"] <= prev["SMA_50"] and latest["SMA_20"] > latest["SMA_50"]:
+    # تقاطع EMA 9 مع EMA 21
+    if prev["EMA_9"] <= prev["EMA_21"] and latest["EMA_9"] > latest["EMA_21"]:
         buy_score += 2
-        reasons.append("تقاطع إيجابي (Golden Cross) بين المتوسط 20 والمتوسط 50.")
-    elif (
-        prev["SMA_20"] >= prev["SMA_50"] and latest["SMA_20"] < latest["SMA_50"]
-    ):
+        reasons.append("تقاطع إيجابي سريح (EMA 9 يعبر أعلى EMA 21).")
+    elif prev["EMA_9"] >= prev["EMA_21"] and latest["EMA_9"] < latest["EMA_21"]:
         sell_score += 2
-        reasons.append("تقاطع سلبي (Death Cross) بين المتوسط 20 والمتوسط 50.")
+        reasons.append("تقاطع سلبي سريع (EMA 9 يعبر أدنى EMA 21).")
 
-    if latest["Close"] > latest["SMA_200"]:
-        buy_score += 1
-        reasons.append("السعر يتداول أعلى من المتوسط المتحرك 200 (اتجاه صاعد عام).")
-    else:
-        sell_score += 1
-        reasons.append("السعر يتداول أدنى من المتوسط المتحرك 200 (اتجاه هابط عام).")
+    # مؤشر Stochastic
+    if latest["%K"] < 20 and latest["%K"] > latest["%D"]:
+        buy_score += 1.5
+        reasons.append(f"مؤشر الاستوكاستك يظهر تقاطع إيجابي من منطقة التشبع البيعي ({latest['%K']:.1f}).")
+    elif latest["%K"] > 80 and latest["%K"] < latest["%D"]:
+        sell_score += 1.5
+        reasons.append(f"مؤشر الاستوكاستك يظهر تقاطع سلبي من منطقة التشبع الشرائي ({latest['%K']:.1f}).")
 
+    # مؤشر MACD
+    if prev["MACD"] <= prev["MACD_Signal"] and latest["MACD"] > latest["MACD_Signal"]:
+        buy_score += 1.5
+        reasons.append("تقاطع إيجابي لمؤشر MACD.")
+    elif prev["MACD"] >= prev["MACD_Signal"] and latest["MACD"] < latest["MACD_Signal"]:
+        sell_score += 1.5
+        reasons.append("تقاطع سلبي لمؤشر MACD.")
+
+    # مؤشر RSI
     rsi = latest["RSI"]
-    if rsi < 30:
-        buy_score += 2
-        reasons.append(
-            f"مؤشر RSI أدنى من 30 ({rsi:.1f}) - تشبع بيعي (فرصة انعكاس صعودي)."
-        )
-    elif rsi > 70:
-        sell_score += 2
-        reasons.append(
-            f"مؤشر RSI أعلى من 70 ({rsi:.1f}) - تشبع شرائي (تصحيح محتمل)."
-        )
+    if rsi < 35:
+        buy_score += 1
+        reasons.append(f"مؤشر RSI أدنى من 35 ({rsi:.1f}).")
+    elif rsi > 65:
+        sell_score += 1
+        reasons.append(f"مؤشر RSI أعلى من 65 ({rsi:.1f}).")
 
+    # تقييم النتيجة
     if buy_score >= 3.5:
         signal_text = "شراء قوي 🚀"
         signal_class = "buy-signal"
@@ -167,93 +191,79 @@ def analyze_signals(df):
     return signal_text, signal_class, reasons
 
 
-# القائمة الجانبية
-st.sidebar.title("🪙 خيارات التحليل")
-symbol_option = st.sidebar.selectbox(
-    "اختر أداة الذهب:", ["عقود الذهب الآجلة (GC=F)", "صندوق الذهب (GLD)"]
-)
-selected_ticker = "GC=F" if "GC=F" in symbol_option else "GLD"
-period = st.sidebar.select_slider(
-    "النطاق الزمني:", options=["1mo", "3mo", "6mo", "1y"], value="6mo"
+# --- القائمة الجانبية ---
+st.sidebar.title("🪙 إعدادات المضاربة اللحظية")
+interval_option = st.sidebar.selectbox(
+    "اختر الفريم الزمني:",
+    ["15 دقيقة (15m)", "5 دقائق (5m)"],
+    index=0
 )
 
-# الواجهة الرئيسية
-st.title("📊 منصة تحليل الذهب وتحديد الأهداف")
+interval = "15m" if "15m" in interval_option else "5m"
+period = "1d" if interval == "5m" else "5d"
 
-df_raw = fetch_gold_data(selected_ticker, period)
+# --- الواجهة الرئيسية ---
+st.title(f"📊 منصة تحليل الذهب اللحظية - فريم ({interval})")
+
+df_raw = fetch_gold_data("GC=F", period=period, interval=interval)
 
 if df_raw is not None and not df_raw.empty:
     df = calculate_indicators(df_raw)
     signal_text, signal_class, reasons = analyze_signals(df)
     targets = calculate_targets(df, signal_text)
 
-    st.subheader("التوصية الفنية")
-    st.markdown(
-        f'<div class="signal-box {signal_class}">{signal_text}</div>',
-        unsafe_allow_html=True,
-    )
+    # عرض التوصية والأهداف
+    c_sig, c_tar = st.columns([1, 1.2])
 
-    st.markdown("**أسباب التوصية:**")
-    for r in reasons:
-        st.markdown(f"- {r}")
+    with c_sig:
+        st.subheader("التوصية الحالية")
+        st.markdown(f'<div class="signal-box {signal_class}">{signal_text}</div>', unsafe_allow_html=True)
+        st.markdown("**أسباب الإشارة:**")
+        for r in reasons:
+            st.markdown(f"- {r}")
 
-    st.markdown("---")
-
-    st.subheader("🎯 الأهداف المستهدفة ومستويات المخاطرة")
-    if targets["type"] in ["BUY", "SELL"]:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("الهدف الأول (TP1)", f"${targets['tp1']:.2f}")
-        c2.metric("الهدف الثاني (TP2)", f"${targets['tp2']:.2f}")
-        c3.metric(
-            "وقف الخسارة (SL)",
-            f"${targets['sl']:.2f}",
-            delta_color="inverse",
-        )
-    else:
-        c1, c2 = st.columns(2)
-        c1.metric("مستوى المقاومة القريب", f"${targets['resistance']:.2f}")
-        c2.metric("مستوى الدعم القريب", f"${targets['support']:.2f}")
+    with c_tar:
+        st.subheader("🎯 الأهداف والوقف اللحظي")
+        if targets["type"] in ["BUY", "SELL"]:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("الهدف 1 (TP1)", f"${targets['tp1']:.2f}")
+            m2.metric("الهدف 2 (TP2)", f"${targets['tp2']:.2f}")
+            m3.metric("الوقف (SL)", f"${targets['sl']:.2f}", delta_color="inverse")
+        else:
+            m1, m2 = st.columns(2)
+            m1.metric("المقاومة اللحظية", f"${targets['resistance']:.2f}")
+            m2.metric("الدعم اللحظي", f"${targets['support']:.2f}")
 
     st.markdown("---")
 
-    st.subheader("📈 الرسم البياني مع الأهداف")
-    fig = go.Figure()
+    # الرسم البياني المتعدد (الشموع + الاستوكاستك)
+    st.subheader("📈 رسم الشموع والمؤشرات الفنية")
 
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            name="الذهب",
-        )
-    )
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    if targets["type"] in ["BUY", "SELL"]:
-        fig.add_hline(
-            y=targets["tp1"],
-            line_dash="dot",
-            line_color="#26a69a",
-            annotation_text="الهدف الأول TP1",
-        )
-        fig.add_hline(
-            y=targets["tp2"],
-            line_dash="dash",
-            line_color="#26a69a",
-            annotation_text="الهدف الثاني TP2",
-        )
-        fig.add_hline(
-            y=targets["sl"],
-            line_dash="solid",
-            line_color="#ef5350",
-            annotation_text="وقف الخسارة SL",
-        )
-
-    fig.update_layout(
-        template="plotly_dark", height=500, xaxis_rangeslider_visible=False
-    )
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.error("تعذر جلب البيانات. يرجى إعادة المحاولة.")
+    # الشموع والمتوسطات
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="الذهب"
+    ), row=1, col=1)
     
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA_9'], name="EMA 9", line=dict(color="#FF9800", width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA_21'], name="EMA 21", line=dict(color="#2196F3", width=1.5)), row=1, col=1)
+
+    # خطوط الأهداف
+    if targets["type"] in ["BUY", "SELL"]:
+        fig.add_hline(y=targets["tp1"], line_dash="dot", line_color="#26a69a", annotation_text="TP1", row=1, col=1)
+        fig.add_hline(y=targets["tp2"], line_dash="dash", line_color="#26a69a", annotation_text="TP2", row=1, col=1)
+        fig.add_hline(y=targets["sl"], line_dash="solid", line_color="#ef5350", annotation_text="SL", row=1, col=1)
+
+    # مؤشر Stochastic
+    fig.add_trace(go.Scatter(x=df.index, y=df['%K'], name="%K", line=dict(color="#00E676", width=1.5)), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['%D'], name="%D", line=dict(color="#FF1744", width=1.5)), row=2, col=1)
+    fig.add_hline(y=80, line_dash="dash", line_color="gray", row=2, col=1)
+    fig.add_hline(y=20, line_dash="dash", line_color="gray", row=2, col=1)
+
+    fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.error("تعذر جلب البيانات للفريم المختار، يرجى إعادة المحاولة.")
+        
