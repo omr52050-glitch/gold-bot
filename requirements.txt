@@ -1,5 +1,6 @@
 streamlit
-backtrader
 yfinance
 pandas
-matplotlib
+numpy
+plotly
+requests
